@@ -1,0 +1,70 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description:
+  Create Route53Resolver
+
+Resources:
+  # ---------------------------------------------------------------------- #
+  # リゾルバエンドポイント用のセキュリティグループ
+  # 対象となるVPCからのDNSクエリ(port53)のみ受け付ける
+  # ---------------------------------------------------------------------- #
+  ResolverEndpointSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: resolver-endpoint-sg 
+      GroupDescription: Security group for resolver endpoint. This only allows DNS query from VPC.
+      SecurityGroupIngress:
+      - CidrIp: 172.0.0.0/16 #endpointへのアクセスを許可するIPを記載する。VPCに限定する場合はVPCのCIDRブロックを書く
+        FromPort: 53
+        ToPort: 53
+        IpProtocol: tcp
+      - CidrIp: 172.0.0.0/16
+        FromPort: 53
+        ToPort: 53
+        IpProtocol: udp
+      SecurityGroupEgress:
+      - IpProtocol: '-1' #アウトバウンドはすべての通信を許可
+        CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: resolver-endpoint-sg
+      VpcId: vpc-xxxxxxxx #sgと紐付けるVPCのIDを記載する
+
+  # ---------------------------------------------------------------------- #
+  # DNSリゾルバのエンドポイント
+  # ---------------------------------------------------------------------- #
+  ResolverEndpoint:
+    Type: AWS::Route53Resolver::ResolverEndpoint
+    Properties:
+      Direction: OUTBOUND #AWS環境からオンプレ環境へDNSクエリを投げたいのでOUTBOUNDに設定
+      IpAddresses:
+      - SubnetId: subnet-xxxxxxxx #endpointを設置するsubnetIDを記載する。
+      - SubnetId: subnet-yyyyyyyy #リゾルバーの信頼性を高めるため、別々のAZに設置された2つ以上のサブネットIDを指定すること
+      Name: resolver-endpoint
+      SecurityGroupIds:
+      - !Ref ResolverEndpointSG
+
+  # ---------------------------------------------------------------------- #
+  # DNSリゾルバのルール
+  # DB（onpremisesdb.sample.com）宛のDNSクエリだった場合に、オンプレのDNSにクエリを転送する
+  # ---------------------------------------------------------------------- #
+  ResolverRule:
+    Type: AWS::Route53Resolver::ResolverRule
+    Properties:
+      DomainName: onpremisesdb.sample.com #転送したいドメイン名を記載する
+      Name: test-resolver-rule
+      ResolverEndpointId: !Ref ResolverEndpoint
+      RuleType: "FORWARD"
+      TargetIps:
+      - Ip: 10.10.10.10 #オンプレのDNSのIPを記載する
+        Port: 53
+
+  # ---------------------------------------------------------------------- #
+  # リゾルバとVPCをつなぐためのリソース
+  # マネジメントコンソールでは、このリソースは自動で作成される
+  # ---------------------------------------------------------------------- #
+  ResolverRuleAssociation:
+    Type: AWS::Route53Resolver::ResolverRuleAssociation
+    Properties:
+      Name: resolver-rule-association
+      ResolverRuleId: !Ref ResolverRule
+      VPCId: vpc-xxxxxxxx
